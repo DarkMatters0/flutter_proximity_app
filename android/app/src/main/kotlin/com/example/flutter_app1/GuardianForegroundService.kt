@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 
 /**
  * Keeps the Android process alive while GuardianBLE is monitoring beacons.
@@ -21,9 +22,20 @@ class GuardianForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        val pm = getSystemService(POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GuardianBLE::MonitoringLock")
+        wakeLock?.acquire()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        wakeLock?.release()
+        wakeLock = null
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

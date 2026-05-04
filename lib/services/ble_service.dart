@@ -46,6 +46,7 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
   String get statusMessage => _statusMessage;
 
   bool get hasActiveAlarm =>
+      _isMonitoring &&
       _registeredBeacons.any((b) =>
           b.status == BeaconStatus.alarm ||
           b.status == BeaconStatus.disconnected);
@@ -153,7 +154,8 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
           _alertChannelName,
           importance: Importance.high,
           priority: Priority.high,
-          fullScreenIntent: true, // overlays lock screen when phone is asleep
+          fullScreenIntent: true,
+          visibility: NotificationVisibility.public, // show content on lock screen
           ongoing: false,
           autoCancel: false,
         ),
@@ -393,6 +395,10 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
     } catch (e) {
       debugPrint('[BleService] startService error: $e');
     }
+
+    // Request battery optimization exemption so Android does not Doze the app
+    // and suspend Dart timers / BLE scan callbacks while the screen is off.
+    await Permission.ignoreBatteryOptimizations.request();
 
     // Start the first monitoring scan cycle
     await _startMonitoringScan();
