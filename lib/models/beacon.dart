@@ -70,7 +70,9 @@ class Beacon {
     double absExp = negative ? -exp : exp;
     int intPart = absExp.toInt();
     double fracPart = absExp - intPart;
-    for (int i = 0; i < intPart; i++) result *= base;
+    for (int i = 0; i < intPart; i++) {
+      result *= base;
+    }
     if (fracPart > 0) result *= _approxPow(base, fracPart);
     return negative ? 1.0 / result : result;
   }

@@ -36,11 +36,11 @@ class GuardianBleApp extends StatelessWidget {
       title: 'GuardianBLE',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        colorScheme: ColorScheme.dark(
-          primary: const Color(0xFF00D4FF),
-          secondary: const Color(0xFF00FF9F),
-          error: const Color(0xFFFF4B6E),
-          surface: const Color(0xFF0F1B35),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF00D4FF),
+          secondary: Color(0xFF00FF9F),
+          error: Color(0xFFFF4B6E),
+          surface: Color(0xFF0F1B35),
         ),
         scaffoldBackgroundColor: const Color(0xFF0A0A1A),
         useMaterial3: true,
@@ -105,7 +105,7 @@ class _BluetoothOffScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Text(
+                const Text(
                   'GuardianBLE needs Bluetooth to track your beacons. Please turn on Bluetooth to continue.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white38, fontSize: 13, height: 1.6),

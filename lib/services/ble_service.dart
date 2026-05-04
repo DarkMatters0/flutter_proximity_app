@@ -1,14 +1,17 @@
 // lib/services/ble_service.dart
 
 import 'dart:async';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:vibration/vibration.dart';
 import '../models/beacon.dart';
 
-class BleService extends ChangeNotifier {
+class BleService extends ChangeNotifier with WidgetsBindingObserver {
   // All registered (saved) beacons
   final List<Beacon> _registeredBeacons = [];
 
@@ -45,8 +48,150 @@ class BleService extends ChangeNotifier {
   bool get hasActiveAlarm =>
       _registeredBeacons.any((b) => b.status == BeaconStatus.alarm);
 
+  // ─── Background / notification fields ───────────────────────────────────────
+
+  bool _isAppInBackground = false;
+
+  final FlutterLocalNotificationsPlugin _notifications =
+      FlutterLocalNotificationsPlugin();
+
+  static const MethodChannel _methodChannel =
+      MethodChannel('com.example.flutter_app1/foreground_service');
+
+  static const String _alertChannelId = 'guardian_alerts';
+  static const String _alertChannelName = 'GuardianBLE Alerts';
+
+  // Tracks last status for which a notification was shown per beacon.
+  // null means no notification has been fired yet for this beacon.
+  final Map<String, BeaconStatus?> _lastNotifiedStatus = {};
+
+  // Stable notification IDs per beacon (starting at 2000; 1001 = foreground service)
+  final Map<String, int> _beaconNotificationIds = {};
+  int _nextNotificationId = 2000;
+
+  // ─── Constructor ─────────────────────────────────────────────────────────────
+
   BleService() {
+    WidgetsBinding.instance.addObserver(this);
     _loadSavedBeacons();
+    _initNotifications();
+  }
+
+  // ─── App lifecycle observer ──────────────────────────────────────────────────
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _isAppInBackground = state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached ||
+        state == AppLifecycleState.hidden;
+  }
+
+  // ─── Notification initialisation ────────────────────────────────────────────
+
+  Future<void> _initNotifications() async {
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    await _notifications.initialize(
+      const InitializationSettings(android: androidInit),
+    );
+
+    // High-importance channel for beacon warning/alarm alerts.
+    // Must be created before any notification is posted.
+    const AndroidNotificationChannel alertChannel = AndroidNotificationChannel(
+      _alertChannelId,
+      _alertChannelName,
+      description: 'Alerts when a tracked beacon goes out of range',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: false, // vibration is handled by the Vibration package
+    );
+
+    await _notifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(alertChannel);
+
+    // Request POST_NOTIFICATIONS permission (Android 13+).
+    // permission_handler is already a dependency — reuse it.
+    await Permission.notification.request();
+  }
+
+  // ─── Show a beacon alert notification ───────────────────────────────────────
+
+  Future<void> _showBeaconNotification(
+      Beacon beacon, BeaconStatus status) async {
+    final int notifId = _beaconNotificationIds.putIfAbsent(
+      beacon.deviceId,
+      () => _nextNotificationId++,
+    );
+
+    final String name = beacon.displayName;
+    final String title = status == BeaconStatus.warning
+        ? '⚠️ $name is getting far away!'
+        : '🚨 $name is out of range!';
+    final String body = status == BeaconStatus.warning
+        ? 'Move closer to $name.'
+        : '$name may be lost!';
+
+    await _notifications.show(
+      notifId,
+      title,
+      body,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _alertChannelId,
+          _alertChannelName,
+          importance: Importance.high,
+          priority: Priority.high,
+          fullScreenIntent: true, // overlays lock screen when phone is asleep
+          ongoing: false,
+          autoCancel: false,
+        ),
+      ),
+    );
+  }
+
+  // ─── Dismiss a beacon notification ──────────────────────────────────────────
+
+  Future<void> _dismissBeaconNotification(Beacon beacon) async {
+    final id = _beaconNotificationIds[beacon.deviceId];
+    if (id != null) await _notifications.cancel(id);
+  }
+
+  Future<void> _dismissAllBeaconNotifications() async {
+    for (final id in _beaconNotificationIds.values) {
+      await _notifications.cancel(id);
+    }
+    _lastNotifiedStatus.clear();
+  }
+
+  // ─── Notification state machine ──────────────────────────────────────────────
+  // Called after every status change (scan result or watchdog).
+  // Fires a notification only when:
+  //   - Status has changed (no duplicate spam)
+  //   - App is in background (screen off or app backgrounded)
+  // Dismisses notification automatically when beacon recovers to SAFE.
+
+  Future<void> _checkAndNotify() async {
+    for (final beacon in _registeredBeacons) {
+      final newStatus = beacon.status;
+      final prevNotified = _lastNotifiedStatus[beacon.deviceId];
+
+      if (newStatus == BeaconStatus.safe) {
+        if (prevNotified != null && prevNotified != BeaconStatus.safe) {
+          await _dismissBeaconNotification(beacon);
+          _lastNotifiedStatus[beacon.deviceId] = BeaconStatus.safe;
+        }
+      } else {
+        if (newStatus != prevNotified && _isAppInBackground) {
+          await _showBeaconNotification(beacon, newStatus);
+          _lastNotifiedStatus[beacon.deviceId] = newStatus;
+        } else if (prevNotified == null) {
+          // Record the baseline even if app is in foreground so we
+          // detect future transitions correctly.
+          _lastNotifiedStatus[beacon.deviceId] = newStatus;
+        }
+      }
+    }
   }
 
   // ─── Persistence ────────────────────────────────────────────────────────────
@@ -78,7 +223,7 @@ class BleService extends ChangeNotifier {
     await _audioPlayer.play(AssetSource('sounds/alarm.mp3'));
 
     // Vibrate in a repeating pattern: vibrate, pause, vibrate, pause...
-    if (await Vibration.hasVibrator() ?? false) {
+    if (await Vibration.hasVibrator()) {
       Vibration.vibrate(
         pattern: [0, 800, 400, 800, 400, 800],
         repeat: 0, // repeat from index 0 = loops forever
@@ -178,6 +323,14 @@ class BleService extends ChangeNotifier {
     _statusMessage = 'Monitoring ${_registeredBeacons.length} beacon(s)...';
     notifyListeners();
 
+    // Start the Android foreground service so the process stays alive when
+    // the screen is off. Non-fatal if it fails (monitoring still works in foreground).
+    try {
+      await _methodChannel.invokeMethod('startService');
+    } catch (e) {
+      debugPrint('[BleService] startService error: $e');
+    }
+
     // Start the first monitoring scan cycle
     await _startMonitoringScan();
 
@@ -185,7 +338,7 @@ class BleService extends ChangeNotifier {
     // This is the KEY fix for the "goes offline after minutes" issue.
     _scanRestartTimer?.cancel();
     _scanRestartTimer =
-        Timer.periodic(Duration(seconds: _scanRestartIntervalSec), (_) async {
+        Timer.periodic(const Duration(seconds: _scanRestartIntervalSec), (_) async {
       if (!_isMonitoring) return;
       await FlutterBluePlus.stopScan();
       await Future.delayed(const Duration(milliseconds: 500));
@@ -195,7 +348,7 @@ class BleService extends ChangeNotifier {
     // Watchdog: mark beacons as disconnected if not seen recently
     _disconnectWatchdog?.cancel();
     _disconnectWatchdog =
-        Timer.periodic(const Duration(seconds: 3), (_) {
+        Timer.periodic(const Duration(seconds: 3), (_) async {
       final now = DateTime.now();
       bool changed = false;
       for (final beacon in _registeredBeacons) {
@@ -216,6 +369,7 @@ class BleService extends ChangeNotifier {
         } else {
           _stopAlarm();
         }
+        await _checkAndNotify();
       }
     });
   }
@@ -233,7 +387,7 @@ class BleService extends ChangeNotifier {
       );
 
       _monitorScanSubscription =
-          FlutterBluePlus.scanResults.listen((results) {
+          FlutterBluePlus.scanResults.listen((results) async {
         bool changed = false;
         for (final result in results) {
           final id = result.device.remoteId.str;
@@ -253,6 +407,7 @@ class BleService extends ChangeNotifier {
           } else {
             _stopAlarm();
           }
+          await _checkAndNotify();
         }
       });
     } catch (e) {
@@ -277,11 +432,21 @@ class BleService extends ChangeNotifier {
     for (final b in _registeredBeacons) {
       b.markDisconnected();
     }
+
+    // Dismiss all beacon notifications and stop the foreground service.
+    await _dismissAllBeaconNotifications();
+    try {
+      await _methodChannel.invokeMethod('stopService');
+    } catch (e) {
+      debugPrint('[BleService] stopService error: $e');
+    }
+
     notifyListeners();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stopAlarm();
     _audioPlayer.dispose();
     stopMonitoring();

@@ -3,6 +3,16 @@
 
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Background monitoring: keep process alive when screen is off -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Notifications: show alerts when app is in background (Android 13+) -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Lock-screen overlay for alarm notifications (Android 14+, targetSdk 34) -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <!-- BLE Permissions for Android 12+ -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation" />
@@ -44,6 +54,12 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Foreground service keeps BLE monitoring alive when screen is off -->
+        <service
+            android:name=".GuardianForegroundService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false" />
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

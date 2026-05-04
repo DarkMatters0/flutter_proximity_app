@@ -63,7 +63,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
             hintText: 'Enter name (e.g. Nico, Dog Max)',
-            hintStyle: TextStyle(color: Colors.white38),
+            hintStyle: const TextStyle(color: Colors.white38),
             filled: true,
             fillColor: const Color(0xFF0F3460),
             border: OutlineInputBorder(
@@ -76,7 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           TextButton(
             onPressed: () => Navigator.pop(ctx),
             child:
-                Text('Cancel', style: TextStyle(color: Colors.white54)),
+                const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -113,12 +113,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 color: Colors.white, fontWeight: FontWeight.bold)),
         content: Text(
           'Remove "${beacon.displayName}" from your tracking list?',
-          style: TextStyle(color: Colors.white70),
+          style: const TextStyle(color: Colors.white70),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: TextStyle(color: Colors.white54)),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -341,7 +341,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
       child: Row(
         children: [
-          Icon(Icons.info_outline_rounded, color: Colors.white38, size: 14),
+          const Icon(Icons.info_outline_rounded, color: Colors.white38, size: 14),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

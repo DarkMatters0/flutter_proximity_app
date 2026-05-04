@@ -61,9 +61,9 @@ class _ScanScreenState extends State<ScanScreen> {
 
     if (alreadyAdded) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
+        const SnackBar(
           content: Text('This beacon is already in your list.'),
-          backgroundColor: const Color(0xFF0F3460),
+          backgroundColor: Color(0xFF0F3460),
         ),
       );
       return;
@@ -145,7 +145,7 @@ class _ScanScreenState extends State<ScanScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: Text('Cancel', style: TextStyle(color: Colors.white38)),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white38)),
           ),
           ElevatedButton(
             onPressed: () {
@@ -159,7 +159,7 @@ class _ScanScreenState extends State<ScanScreen> {
               Navigator.pop(context); // Go back to dashboard
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text(
+                  content: const Text(
                     'Beacon added! Tap "Start Monitoring" to begin tracking.',
                   ),
                   backgroundColor: const Color(0xFF00FF9F).withOpacity(0.8),
@@ -219,12 +219,12 @@ class _ScanScreenState extends State<ScanScreen> {
                             color: const Color(0xFF0F3460).withOpacity(0.5),
                             child: Row(
                               children: [
-                                SizedBox(
+                                const SizedBox(
                                   width: 16,
                                   height: 16,
                                   child: CircularProgressIndicator(
                                     strokeWidth: 2,
-                                    color: const Color(0xFF00D4FF),
+                                    color: Color(0xFF00D4FF),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
