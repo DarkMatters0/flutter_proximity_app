@@ -46,7 +46,18 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
   String get statusMessage => _statusMessage;
 
   bool get hasActiveAlarm =>
-      _registeredBeacons.any((b) => b.status == BeaconStatus.alarm);
+      _registeredBeacons.any((b) =>
+          b.status == BeaconStatus.alarm ||
+          b.status == BeaconStatus.disconnected);
+
+  // ─── GATT remote buzzer control ─────────────────────────────────────────────
+
+  static const String _gattServiceUuid = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+  static const String _alarmCharUuid   = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
+
+  // Tracks what was last successfully sent to each beacon's buzzer.
+  // null = never sent, true = 0x01 (ON) sent, false = 0x00 (OFF) sent.
+  final Map<String, bool?> _lastBuzzerSent = {};
 
   // ─── Background / notification fields ───────────────────────────────────────
 
@@ -238,6 +249,57 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
     Vibration.cancel();
   }
 
+  // ─── Remote buzzer control via BLE GATT write ───────────────────────────────
+
+  Future<void> _sendBuzzerCommand(Beacon beacon, bool alarmOn) async {
+    if (_lastBuzzerSent[beacon.deviceId] == alarmOn) return;
+    _lastBuzzerSent[beacon.deviceId] = alarmOn; // optimistic — blocks concurrent calls
+
+    try {
+      final device = BluetoothDevice.fromId(beacon.deviceId);
+      await device.connect(
+          timeout: const Duration(seconds: 8), autoConnect: false);
+      final services = await device.discoverServices();
+      final service = services
+          .where((s) =>
+              s.serviceUuid.toString().toLowerCase() == _gattServiceUuid)
+          .firstOrNull;
+      if (service == null) {
+        debugPrint('[BleService] GATT service not found on ${beacon.displayName}');
+        await device.disconnect();
+        return;
+      }
+      final char = service.characteristics
+          .where((c) =>
+              c.characteristicUuid.toString().toLowerCase() == _alarmCharUuid)
+          .firstOrNull;
+      if (char == null) {
+        debugPrint('[BleService] Alarm characteristic not found on ${beacon.displayName}');
+        await device.disconnect();
+        return;
+      }
+      await char.write([alarmOn ? 0x01 : 0x00]);
+      await device.disconnect();
+      debugPrint(
+          '[BleService] Buzzer ${alarmOn ? "ON" : "OFF"} → ${beacon.displayName}');
+    } catch (e) {
+      _lastBuzzerSent[beacon.deviceId] = null; // reset so retry is possible
+      debugPrint('[BleService] GATT write error for ${beacon.displayName}: $e');
+    }
+  }
+
+  void _syncBuzzerCommands() {
+    for (final beacon in _registeredBeacons) {
+      if (beacon.status == BeaconStatus.alarm) {
+        _sendBuzzerCommand(beacon, true); // fire-and-forget
+      } else if (beacon.status == BeaconStatus.safe ||
+          beacon.status == BeaconStatus.warning) {
+        _sendBuzzerCommand(beacon, false); // fire-and-forget
+      }
+      // DISCONNECTED: skip — device is unreachable; buzzer holds its last state
+    }
+  }
+
   // ─── Scanning (for discovering new devices to register) ─────────────────────
 
   Future<void> startScan() async {
@@ -303,6 +365,7 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
 
   void removeBeacon(String deviceId) {
     _registeredBeacons.removeWhere((b) => b.deviceId == deviceId);
+    _lastBuzzerSent.remove(deviceId);
     _saveBeacons();
     notifyListeners();
   }
@@ -363,12 +426,12 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (changed) {
         notifyListeners();
-        // Check alarm state after watchdog marks beacons disconnected
         if (hasActiveAlarm) {
           _triggerAlarm();
         } else {
           _stopAlarm();
         }
+        _syncBuzzerCommands(); // send ON/OFF to ESP32 buzzer when state changes
         await _checkAndNotify();
       }
     });
@@ -401,12 +464,12 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
         }
         if (changed) {
           notifyListeners();
-          // Trigger or stop alarm based on current beacon states
           if (hasActiveAlarm) {
             _triggerAlarm();
           } else {
             _stopAlarm();
           }
+          _syncBuzzerCommands(); // send ON/OFF to ESP32 buzzer when state changes
           await _checkAndNotify();
         }
       });
@@ -432,6 +495,14 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
     for (final b in _registeredBeacons) {
       b.markDisconnected();
     }
+
+    // Send buzzer OFF to any beacons that were actively alarmed, then clear state.
+    for (final beacon in _registeredBeacons) {
+      if (_lastBuzzerSent[beacon.deviceId] == true) {
+        _sendBuzzerCommand(beacon, false); // fire-and-forget
+      }
+    }
+    _lastBuzzerSent.clear();
 
     // Dismiss all beacon notifications and stop the foreground service.
     await _dismissAllBeaconNotifications();
