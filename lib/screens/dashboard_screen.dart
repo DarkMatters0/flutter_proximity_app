@@ -173,6 +173,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                                   _showRenameDialog(context, beacon),
                               onDelete: () =>
                                   _showDeleteConfirm(context, beacon),
+                              onToggleActive: () => context
+                                  .read<BleService>()
+                                  .toggleBeaconActive(beacon.deviceId),
                             );
                           },
                         ),

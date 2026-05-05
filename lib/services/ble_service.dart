@@ -23,7 +23,7 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
   bool _alarmActive = false;
   String _statusMessage = 'Ready';
 
-  // Increased disconnect timeout from 8s to 15s to reduce false disconnects.
+  // Increased disconnect timeout to 15s to reduce false disconnects.
   // BLE advertisements + OS scan throttling can easily introduce 8-12s gaps.
   static const int _disconnectTimeoutSec = 15;
 
@@ -48,8 +48,9 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
   bool get hasActiveAlarm =>
       _isMonitoring &&
       _registeredBeacons.any((b) =>
-          b.status == BeaconStatus.alarm ||
-          b.status == BeaconStatus.disconnected);
+          b.isActive &&
+          (b.status == BeaconStatus.alarm ||
+           b.status == BeaconStatus.disconnected));
 
   // ─── GATT remote buzzer control ─────────────────────────────────────────────
 
@@ -186,6 +187,7 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _checkAndNotify() async {
     for (final beacon in _registeredBeacons) {
+      if (!beacon.isActive) continue;
       final newStatus = beacon.status;
       final prevNotified = _lastNotifiedStatus[beacon.deviceId];
 
@@ -380,6 +382,19 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  void toggleBeaconActive(String deviceId) {
+    final beacon =
+        _registeredBeacons.firstWhere((b) => b.deviceId == deviceId);
+    beacon.isActive = !beacon.isActive;
+    _saveBeacons();
+    notifyListeners();
+    if (beacon.isActive && hasActiveAlarm) {
+      _triggerAlarm();
+    } else if (!hasActiveAlarm) {
+      _stopAlarm();
+    }
+  }
+
   // ─── Monitoring ──────────────────────────────────────────────────────────────
 
   Future<void> startMonitoring() async {
@@ -426,7 +441,7 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
           if (elapsed > _disconnectTimeoutSec &&
               beacon.status != BeaconStatus.disconnected) {
             beacon.markDisconnected();
-            changed = true;
+            if (beacon.isActive) changed = true;
           }
         }
       }
@@ -444,7 +459,6 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Internal: starts a single BLE scan cycle for monitoring.
-  /// Uses lowPower mode to be battery-friendly during continuous background use.
   Future<void> _startMonitoringScan() async {
     await _monitorScanSubscription?.cancel();
     _monitorScanSubscription = null;
@@ -452,7 +466,7 @@ class BleService extends ChangeNotifier with WidgetsBindingObserver {
     try {
       await FlutterBluePlus.startScan(
         androidUsesFineLocation: true,
-        androidScanMode: AndroidScanMode.lowPower,
+        androidScanMode: AndroidScanMode.balanced,
       );
 
       _monitorScanSubscription =

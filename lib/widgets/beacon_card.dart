@@ -9,6 +9,7 @@ class BeaconCard extends StatelessWidget {
   final Animation<double> pulseAnimation;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final VoidCallback onToggleActive;
 
   const BeaconCard({
     super.key,
@@ -16,6 +17,7 @@ class BeaconCard extends StatelessWidget {
     required this.pulseAnimation,
     required this.onRename,
     required this.onDelete,
+    required this.onToggleActive,
   });
 
   Color get _statusColor {
@@ -27,7 +29,7 @@ class BeaconCard extends StatelessWidget {
       case BeaconStatus.alarm:
         return const Color(0xFFFF4B6E);
       case BeaconStatus.disconnected:
-        return Colors.white24;
+        return beacon.isActive ? Colors.white24 : const Color(0xFF4A4A6A);
     }
   }
 
@@ -40,7 +42,7 @@ class BeaconCard extends StatelessWidget {
       case BeaconStatus.alarm:
         return 'ALARM';
       case BeaconStatus.disconnected:
-        return 'OFFLINE';
+        return beacon.isActive ? 'OFFLINE' : 'INACTIVE';
     }
   }
 
@@ -53,7 +55,9 @@ class BeaconCard extends StatelessWidget {
       case BeaconStatus.alarm:
         return Icons.crisis_alert_rounded;
       case BeaconStatus.disconnected:
-        return Icons.bluetooth_disabled_rounded;
+        return beacon.isActive
+            ? Icons.bluetooth_disabled_rounded
+            : Icons.pause_circle_outline_rounded;
     }
   }
 
@@ -69,6 +73,7 @@ class BeaconCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isAlarm = beacon.status == BeaconStatus.alarm;
     final isDisconnected = beacon.status == BeaconStatus.disconnected;
+    final isInactive = !beacon.isActive;
 
     return AnimatedBuilder(
       animation: pulseAnimation,
@@ -97,7 +102,12 @@ class BeaconCard extends StatelessWidget {
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: isDisconnected
+                colors: isInactive
+                    ? [
+                        const Color(0xFF0E0E1F),
+                        const Color(0xFF0B0B19),
+                      ]
+                    : isDisconnected
                     ? [
                         const Color(0xFF111124),
                         const Color(0xFF0D0D1E),
@@ -215,6 +225,47 @@ class BeaconCard extends StatelessWidget {
                 const Divider(color: Colors.white10, height: 1),
                 const SizedBox(height: 12),
 
+                // ── Active toggle ──────────────────────────────────────────
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.power_settings_new_rounded,
+                          size: 13,
+                          color: beacon.isActive
+                              ? const Color(0xFF00FF9F)
+                              : Colors.white24,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          beacon.isActive ? 'Monitoring active' : 'Not in use',
+                          style: GoogleFonts.inter(
+                            color: beacon.isActive
+                                ? Colors.white54
+                                : Colors.white24,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Transform.scale(
+                      scale: 0.75,
+                      child: Switch(
+                        value: beacon.isActive,
+                        onChanged: (_) => onToggleActive(),
+                        activeColor: const Color(0xFF00FF9F),
+                        inactiveThumbColor: Colors.white24,
+                        inactiveTrackColor: Colors.white10,
+                        materialTapTargetSize:
+                            MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+
                 // ── Bottom row: stats ──────────────────────────────────────
                 Row(
                   children: [
@@ -260,18 +311,6 @@ class BeaconCard extends StatelessWidget {
                   ],
                 ),
 
-                // ── Last seen ───────────────────────────────────────────────
-                if (beacon.lastSeen != null) ...[
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: Text(
-                      'Last seen: ${_formatTime(beacon.lastSeen!)}',
-                      style: GoogleFonts.inter(
-                          color: Colors.white24, fontSize: 10),
-                    ),
-                  ),
-                ],
               ],
             ),
           ),

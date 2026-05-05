@@ -1,0 +1,300 @@
+================================================================
+  GuardianBLE — How the App Works
+  ES 130 Embedded Systems | BSCS-3A 2026
+================================================================
+
+
+----------------------------------------------------------------
+  OVERVIEW
+----------------------------------------------------------------
+
+GuardianBLE is a child/pet proximity alarm system that works
+entirely over Bluetooth Low Energy (BLE). No internet or GPS
+is required.
+
+  - ESP32 DevKit V1  : worn by the child/pet, acts as a BLE
+                       beacon and GATT server
+  - Flutter Android  : runs on the parent's phone, monitors
+                       signal strength and triggers alarms
+
+When the child moves too far from the parent:
+  1. The phone sounds an alarm and vibrates
+  2. The phone sends a BLE command to the ESP32 to activate
+     its buzzer as well
+
+
+----------------------------------------------------------------
+  HOW DISTANCE IS ESTIMATED
+----------------------------------------------------------------
+
+The app does NOT use GPS. Distance is estimated from the
+Received Signal Strength Indicator (RSSI), which is a measure
+of how strong the Bluetooth signal is at the receiver.
+RSSI is measured in dBm (decibels relative to 1 milliwatt).
+It is always a negative number. The closer to zero, the
+stronger the signal (closer the device).
+
+  Examples:
+    -45 dBm  →  very close (< 1 m)
+    -70 dBm  →  a few meters away
+    -90 dBm  →  far away or signal is weak
+
+
+  Formula used (Free-Space Path Loss model):
+  ─────────────────────────────────────────
+    d = 10 ^ ( (TxPower - RSSI) / (10 × n) )
+
+  Where:
+    d        = estimated distance in meters
+    TxPower  = RSSI measured at exactly 1 meter from the
+               device = -59 dBm (calibrated for ESP32)
+    RSSI     = current averaged signal strength reading
+    n        = path loss exponent = 2.5
+               (accounts for indoor walls, obstacles, etc.
+                free space = 2.0, indoors typically 2–4)
+    10 × n   = 25 (the denominator)
+
+  Example calculation at RSSI = -71 dBm:
+    d = 10 ^ ( (-59 - (-71)) / 25 )
+      = 10 ^ ( 12 / 25 )
+      = 10 ^ 0.48
+      = ~3.0 meters  ← the SAFE/WARNING boundary
+
+  Example calculation at RSSI = -84 dBm:
+    d = 10 ^ ( (-59 - (-84)) / 25 )
+      = 10 ^ ( 25 / 25 )
+      = 10 ^ 1.0
+      = 10.0 meters  ← the WARNING/ALARM boundary
+
+
+  IMPORTANT LIMITATION:
+  RSSI-to-distance is an approximation. Real-world signal
+  is affected by walls, body blocking, phone orientation,
+  and RF interference. Expect ±1–2 m variance around the
+  stated boundaries.
+
+
+----------------------------------------------------------------
+  RSSI SMOOTHING (ROLLING AVERAGE)
+----------------------------------------------------------------
+
+Raw RSSI readings are noisy — they can jump 10–20 dBm in a
+single scan even if nothing moves. To prevent the status from
+flickering, the app uses a rolling average over the last 8
+RSSI readings.
+
+  How it works:
+    - Each new reading is added to a list (max 8 entries)
+    - The oldest reading is dropped when the list is full
+    - Status is computed from the average of all readings
+      in the list, not from the raw latest reading
+
+  Effect on timing:
+    - Going into alarm: takes ~4–5 readings to confirm
+    - Coming back to safe: takes ~3–5 readings to confirm
+    - At "balanced" scan mode (~2–5s per reading), this
+      means transitions take roughly 6–15 seconds
+
+  Fast-recovery flush:
+    - If a new reading is 20+ dBm STRONGER than the current
+      average, it means the device physically came much
+      closer very quickly (e.g., parent runs to child)
+    - In this case, the old stale readings are cleared
+      immediately so recovery happens in 1–2 readings
+      instead of 17+ seconds
+    - 20 dBm is used as the threshold because normal RF
+      noise is only ±5–10 dBm — a 20 dBm jump is always
+      a genuine physical change
+
+
+----------------------------------------------------------------
+  PROXIMITY STATE MACHINE
+----------------------------------------------------------------
+
+The app has 4 states per beacon:
+
+  SAFE
+    Condition  : averaged RSSI >= -71 dBm
+    Distance   : 0 – 3 meters
+    Action     : nothing, green indicator
+
+  WARNING
+    Condition  : averaged RSSI between -71 and -84 dBm
+    Distance   : 3 – 10 meters
+    Action     : yellow visual alert on phone only
+                 (no sound, no buzzer)
+
+  ALARM
+    Condition  : averaged RSSI < -84 dBm
+    Distance   : beyond 10 meters
+    Action     : phone alarm sound + vibration loop
+                 + BLE command sent to ESP32 to activate
+                 its buzzer (GPIO 25)
+
+  DISCONNECTED
+    Condition  : no signal received for 15 seconds
+    Distance   : out of BLE range entirely
+    Action     : same as ALARM (phone alarm + vibration)
+                 but GATT write to buzzer is skipped
+                 because the device is unreachable
+
+
+  HYSTERESIS (prevents boundary flickering):
+  ───────────────────────────────────────────
+  The thresholds for entering and leaving a state are
+  intentionally different. This prevents the status from
+  rapidly switching back and forth when RSSI hovers near
+  a boundary.
+
+    Entering WARNING (from SAFE):   RSSI drops below -71 dBm
+    Leaving  WARNING (back to SAFE): RSSI rises above -66 dBm
+    (need to be at ~1.9 m before WARNING clears, not just 3 m)
+
+    Entering ALARM (from WARNING):   RSSI drops below -84 dBm
+    Leaving  ALARM (back to WARNING): RSSI rises above -78 dBm
+    (need to be at ~5.75 m before ALARM clears, not just 10 m)
+
+
+----------------------------------------------------------------
+  RSSI THRESHOLD DERIVATION
+----------------------------------------------------------------
+
+The -71 dBm and -84 dBm thresholds were calculated to match
+the 3 m and 10 m target distances using the inverse formula:
+
+  RSSI = TxPower - (10 × n × log10(d))
+       = -59 - (25 × log10(d))
+
+  For d = 3 m:
+    RSSI = -59 - (25 × log10(3))
+         = -59 - (25 × 0.4771)
+         = -59 - 11.93
+         = -70.93  ≈  -71 dBm
+
+  For d = 10 m:
+    RSSI = -59 - (25 × log10(10))
+         = -59 - (25 × 1.0)
+         = -59 - 25
+         = -84 dBm
+
+
+----------------------------------------------------------------
+  BLE SCANNING BEHAVIOR
+----------------------------------------------------------------
+
+The app uses Android BLE scanning in "balanced" mode:
+  - Scan window  : 2048 ms active out of every 5120 ms cycle
+  - Typical delivery: one batch of results every ~2–5 seconds
+  - Chosen for stability — "low latency" mode gives faster
+    readings but causes noisy false alarms
+
+Scan restart timer:
+  - The scan is stopped and restarted every 20 seconds
+  - This is required because Android silently kills
+    continuous BLE scans after ~25–30 seconds
+  - There is a 500 ms gap during each restart where no
+    readings come in
+
+Disconnect watchdog:
+  - A timer checks every 3 seconds if any beacon has not
+    been seen in the last 15 seconds
+  - If so, the beacon is marked DISCONNECTED and the alarm
+    triggers
+
+
+----------------------------------------------------------------
+  BLE GATT — HOW THE BUZZER IS CONTROLLED
+----------------------------------------------------------------
+
+When the phone decides the alarm should be ON, it connects
+to the ESP32's GATT server and writes a single byte:
+
+  Write 0x01  →  Buzzer ON  (ESP32 activates GPIO 25)
+  Write 0x00  →  Buzzer OFF (ESP32 deactivates GPIO 25)
+
+  Service UUID      : 4fafc201-1fb5-459e-8fcc-c5c9c331914b
+  Characteristic UUID: beb5483e-36e1-4688-b7f5-ea07361b26a8
+
+The phone connects, writes the byte, then disconnects.
+It does NOT maintain a permanent GATT connection so that
+BLE advertising (used for RSSI distance monitoring) is not
+interrupted.
+
+If the beacon is DISCONNECTED (out of range), the GATT
+write is skipped — the device is unreachable anyway.
+
+
+----------------------------------------------------------------
+  INACTIVE BEACON FEATURE
+----------------------------------------------------------------
+
+Users can mark individual beacons as "Not in use" using the
+toggle switch on each beacon card.
+
+  Active   : beacon is monitored; going offline triggers alarm
+  Inactive : beacon is ignored; offline does NOT trigger alarm
+             and the badge shows "INACTIVE" instead of "OFFLINE"
+
+This is useful when you have multiple registered beacons but
+only some of them are currently being used. The inactive state
+is saved and persists after the app is closed and reopened.
+
+
+----------------------------------------------------------------
+  BACKGROUND MONITORING
+----------------------------------------------------------------
+
+The app continues monitoring even when the screen is off or
+the app is minimized. This works through:
+
+  1. Android Foreground Service
+       A persistent service (GuardianForegroundService.kt)
+       keeps the Dart process alive. Without this, Android
+       would freeze or kill the app after a few minutes.
+
+  2. Battery optimization exemption
+       The app requests to be excluded from Android's Doze
+       mode, which would otherwise suspend BLE scan callbacks
+       and Dart timers when the screen is off.
+
+  3. Background notifications
+       When a beacon goes to WARNING, ALARM, or DISCONNECTED
+       while the app is in the background, a push notification
+       is shown on the status bar.
+
+
+----------------------------------------------------------------
+  HARDWARE (ESP32 BEACON)
+----------------------------------------------------------------
+
+  Component       GPIO   Notes
+  ─────────────────────────────────────────────────────────────
+  Active buzzer    25    HIGH = ON, LOW = OFF
+  Push button      26    INPUT_PULLUP; pressing it silences
+                         the buzzer locally on the ESP32
+  Status LED        2    Built-in LED on DevKit V1
+  Power           USB    Laptop or 5V power bank
+
+  BLE advertising interval: 100 ms (ESP32 default)
+  This means the phone can receive up to 10 signal readings
+  per second from the ESP32 when in range.
+
+
+----------------------------------------------------------------
+  REGISTERED BEACON PERSISTENCE
+----------------------------------------------------------------
+
+Beacon names and their active/inactive state are saved to
+the phone's local storage (SharedPreferences) as JSON.
+They are loaded automatically when the app starts, so you
+do not need to re-register beacons every time.
+
+  Saved fields per beacon:
+    - deviceId    : BLE MAC address (unique identifier)
+    - displayName : user-assigned name (e.g. "Nico")
+    - isActive    : whether the beacon triggers alarms
+
+
+================================================================
+  END OF NOTES
+================================================================

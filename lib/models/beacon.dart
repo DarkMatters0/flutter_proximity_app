@@ -12,6 +12,7 @@ class Beacon {
   double estimatedDistance; // meters
   DateTime? lastSeen;
   List<int> rssiHistory;    // Rolling window for averaging
+  bool isActive;            // False = user marked as "not in use"; skips alarm
 
   Beacon({
     required this.deviceId,
@@ -21,19 +22,46 @@ class Beacon {
     this.estimatedDistance = 0,
     this.lastSeen,
     List<int>? rssiHistory,
+    this.isActive = true,
   }) : rssiHistory = rssiHistory ?? [];
 
-  // Safe threshold: RSSI > -65 dBm (~0-3m)
-  // Warning threshold: RSSI -65 to -80 dBm (~3-10m)
-  // Alarm threshold: RSSI < -80 dBm (>10m or lost)
-  BeaconStatus computeStatus(int avgRssi) {
-    if (avgRssi >= -65) return BeaconStatus.safe;
-    if (avgRssi >= -80) return BeaconStatus.warning;
-    return BeaconStatus.alarm;
+  // Entry thresholds (worsening direction) — tuned for 3 m / 10 m zones:
+  //   SAFE → WARNING : avgRssi < -71 dBm  (~3 m)
+  //   WARNING → ALARM: avgRssi < -84 dBm  (~10 m)
+  //
+  // Exit thresholds (improving direction — hysteresis prevents oscillation
+  // when RSSI hovers near a boundary):
+  //   ALARM → WARNING: avgRssi >= -78 dBm  (~5.75 m, 6 dBm above entry)
+  //   WARNING → SAFE : avgRssi >= -66 dBm  (~1.9 m,  5 dBm above entry)
+  BeaconStatus computeStatus(int avgRssi, BeaconStatus current) {
+    switch (current) {
+      case BeaconStatus.safe:
+        if (avgRssi < -71) return BeaconStatus.warning;
+        return BeaconStatus.safe;
+      case BeaconStatus.warning:
+        if (avgRssi >= -66) return BeaconStatus.safe;
+        if (avgRssi < -84) return BeaconStatus.alarm;
+        return BeaconStatus.warning;
+      case BeaconStatus.alarm:
+        if (avgRssi >= -78) return BeaconStatus.warning;
+        return BeaconStatus.alarm;
+      case BeaconStatus.disconnected:
+        // First reading after reconnect — use entry thresholds to establish state
+        if (avgRssi >= -71) return BeaconStatus.safe;
+        if (avgRssi >= -84) return BeaconStatus.warning;
+        return BeaconStatus.alarm;
+    }
   }
 
-  /// Add new RSSI reading to rolling window (max 8 samples)
+  /// Add new RSSI reading to rolling window (max 8 samples).
+  /// Fast-recovery flush: if the new reading is ≥20 dBm stronger than the
+  /// current average the device has physically moved much closer — stale
+  /// alarm readings are cleared so status recovers in 1–2 readings instead
+  /// of being dragged down for 17+ seconds.
   void addRssiReading(int newRssi) {
+    if (rssiHistory.length >= 4 && (newRssi - averageRssi) >= 20) {
+      rssiHistory.clear();
+    }
     rssiHistory.add(newRssi);
     if (rssiHistory.length > 8) {
       rssiHistory.removeAt(0);
@@ -42,7 +70,7 @@ class Beacon {
     lastSeen = DateTime.now();
 
     final avg = averageRssi;
-    status = computeStatus(avg);
+    status = computeStatus(avg, status);
     estimatedDistance = rssiToDistance(avg);
   }
 
@@ -116,11 +144,13 @@ class Beacon {
   Map<String, dynamic> toJson() => {
         'deviceId': deviceId,
         'displayName': displayName,
+        'isActive': isActive,
       };
 
   factory Beacon.fromJson(Map<String, dynamic> json) => Beacon(
         deviceId: json['deviceId'],
         displayName: json['displayName'],
+        isActive: json['isActive'] as bool? ?? true,
       );
 
   static String encodeList(List<Beacon> beacons) =>
